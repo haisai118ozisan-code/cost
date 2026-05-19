@@ -698,8 +698,15 @@ function renderColTabs(){
   const edit=editingColId?(()=>{const col=cols.find(c=>c.id===editingColId);return`<div class="col-edit"><input type="text" value="${col?.label||""}" oninput="renameCol('${editingColId}',this.value)" placeholder="列名">${cols.length>2?`<button class="btn btn-red" onclick="removeCol('${editingColId}')">削除</button>`:""}<button class="btn btn-blue" onclick="toggleEdit(null)">×</button></div>`;})():"";
   document.getElementById("col-tabs").innerHTML=`<div class="tab-row">${tabs}</div>${edit}`;
 }
-function toggleEdit(id){editingColId=editingColId===id?null:id;renderColTabs();}
-function renameCol(id,val){const c=cols.find(c=>c.id===id);if(c){c.label=val;renderColTabs();recompute();}}
+function toggleEdit(id){editingColId=editingColId===id?null:id;renderColTabs();if(editingColId){setTimeout(()=>{const inp=document.querySelector('.col-edit input');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length);}},50);}}
+function renameCol(id,val){
+  const c=cols.find(c=>c.id===id);if(!c)return;
+  c.label=val;
+  // タブボタンのテキストだけ更新（再描画しない）
+  const tabBtn=document.querySelector(`.tab[onclick="toggleEdit('${id}')"]`);
+  if(tabBtn)tabBtn.textContent=val||id;
+  recompute();
+}
 
 function renderRows(){
   document.getElementById("rows").innerHTML=rows.map((row,ri)=>{
