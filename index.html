@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="価格比較">
 <title>価格比較</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{min-height:100vh;background:#e8e6de;font-family:'Hiragino Sans','Noto Sans JP',sans-serif;padding-bottom:70px;font-size:13px}
@@ -271,12 +272,15 @@ canvas#cc{display:none}
 <canvas id="cc"></canvas>
 
 <script>
-const SK="price_cmp_v14", HSK="price_hist_v1", API_SK="vision_api_key_v1";
+const SK="price_cmp_v15", HSK="price_hist_v1", API_SK="vision_api_key_v1";
+const DRIVE_FILE="価格比較データ.json";
+const SCOPES="https://www.googleapis.com/auth/drive.file";
+const CLIENT_ID="910592498421-qu263dcmn8a8r4gq5t4qpqqshnfojvna.apps.googleusercontent.com";
 
 // データ構造:
 // categories: [{id, label}]
 // shops:      [{id, label}]
-// entries:    {catId: {shopId: {name, price, weight}}}
+// entries:    {catId: {shopId: {name, price, weight, count}}}
 
 let categories=[], shops=[], entries={};
 let activeCatId=null, editingCatId=null;
@@ -284,11 +288,14 @@ let history=[], histFilter="all", pendingHistApply=null;
 let pendingOCR=null;
 let ocrPhotoDataUrl=null, ocrPhotoDataUrlPrice=null, ocrCurrentStep="select";
 let apiKey="", saveTimer=null;
+let isDirty=false; // 未保存フラグ
+let googleUser=null, accessToken=null, driveFileId=null, tokenTimer=null;
 
 const uid=()=>Math.random().toString(36).slice(2,8);
 const per100=(p,w)=>{p=parseFloat(p);w=parseFloat(w);return(p&&w&&w>0)?(p/w)*100:null};
+const perItem=(p,c)=>{p=parseFloat(p);c=parseFloat(c);return(p&&c&&c>0)?p/c:null};
 
-function emptyEntry(){return{name:"",price:"",weight:""}}
+function emptyEntry(){return{name:"",price:"",weight:"",count:""}}
 
 function initData(){
   categories=[{id:uid(),label:"もやし"},{id:uid(),label:"豆腐"},{id:uid(),label:"鶏肉"}];
@@ -317,14 +324,98 @@ function loadData(){
   }catch{}
   initData();
 }
-function saveData(){
-  try{localStorage.setItem(SK,JSON.stringify({categories,shops,entries}));showMsg("保存 ✓")}
-  catch{showMsg("容量不足")}
+
+// ===== Google Drive連携 =====
+function initGoogleAuth(){
+  window.onGoogleLibraryLoad=()=>{
+    try{
+      const saved=localStorage.getItem("pc_google_user");
+      if(saved){googleUser=JSON.parse(saved);renderDriveStatus();refreshDriveToken();}
+    }catch(e){}
+  };
+}
+function googleLoginForDrive(){
+  try{
+    const tc=google.accounts.oauth2.initTokenClient({
+      client_id:CLIENT_ID,scope:SCOPES,
+      callback:(tr)=>{
+        if(tr.error)return;
+        accessToken=tr.access_token;
+        clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);
+        renderDriveStatus();showMsg("☁️ Drive連携済み");
+      }
+    });
+    tc.requestAccessToken({prompt:""});
+  }catch(e){alert("Googleログインに失敗しました。\nページを再読み込みしてください。")}
+}
+function refreshDriveToken(){
+  try{
+    const tc=google.accounts.oauth2.initTokenClient({
+      client_id:CLIENT_ID,scope:SCOPES,
+      callback:(tr)=>{if(!tr.error){accessToken=tr.access_token;clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);}}
+    });
+    tc.requestAccessToken({prompt:""});
+  }catch(e){}
+}
+function googleLogoutDrive(){
+  googleUser=null;accessToken=null;driveFileId=null;
+  clearTimeout(tokenTimer);localStorage.removeItem("pc_google_user");
+  renderDriveStatus();showMsg("Drive切断");
+}
+function renderDriveStatus(){
+  const el=document.getElementById("drive-status-area");if(!el)return;
+  if(accessToken){
+    el.innerHTML=`<span class="save-msg" style="color:#7ec8e3">☁️ Drive連携中</span> <button class="btn btn-teal" onclick="syncDrive()">☁️ 同期</button> <button class="btn btn-red" onclick="googleLogoutDrive()">切断</button>`;
+  }else{
+    el.innerHTML=`<button class="btn btn-blue" onclick="googleLoginForDrive()">☁️ Drive連携</button>`;
+  }
+}
+async function syncDrive(){
+  if(!accessToken){showMsg("Drive未連携");return}
+  try{
+    const body=JSON.stringify({categories,shops,entries,savedAt:new Date().toISOString()});
+    if(!driveFileId){
+      const res=await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${DRIVE_FILE}' and trashed=false&fields=files(id)`,
+        {headers:{Authorization:`Bearer ${accessToken}`}});
+      const d=await res.json();
+      if(d.files?.length)driveFileId=d.files[0].id;
+    }
+    if(driveFileId){
+      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,
+        {method:"PATCH",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json"},body});
+    }else{
+      const meta=await fetch("https://www.googleapis.com/drive/v3/files",
+        {method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json"},
+         body:JSON.stringify({name:DRIVE_FILE,mimeType:"application/json"})});
+      const md=await meta.json();driveFileId=md.id;
+      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,
+        {method:"PATCH",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json"},body});
+    }
+    showMsg("☁️ Drive保存完了");
+  }catch(e){showMsg("⚠️ Driveエラー")}
+}
+  try{
+    localStorage.setItem(SK,JSON.stringify({categories,shops,entries}));
+    isDirty=false;
+    const dm=document.getElementById("dirty-msg");if(dm)dm.style.display="none";
+    showMsg("保存 ✓");
+    if(accessToken)syncDrive();
+  }catch{showMsg("容量不足")}
+}
+function markDirty(){
+  isDirty=true;
+  const el=document.getElementById("dirty-msg");if(el)el.style.display="inline";
 }
 function showMsg(m){
   const el=document.getElementById("save-msg");if(!el)return;
   el.textContent=m;clearTimeout(saveTimer);saveTimer=setTimeout(()=>el.textContent="",2500);
 }
+// ページ離脱前に警告
+window.addEventListener("beforeunload",e=>{
+  if(isDirty){e.preventDefault();e.returnValue="保存されていない変更があります。";return e.returnValue;}
+});
+// 戻るボタン等でも警告
+window.addEventListener("pagehide",()=>{if(isDirty)saveData();});
 
 function loadHistory(){try{history=JSON.parse(localStorage.getItem(HSK))||[]}catch{history=[]}}
 function saveHistory(){try{localStorage.setItem(HSK,JSON.stringify(history.slice(0,200)))}catch{}}
@@ -440,6 +531,7 @@ function updateEntry(catId,shopId,field,val){
   if(!entries[catId])entries[catId]={};
   if(!entries[catId][shopId])entries[catId][shopId]=emptyEntry();
   entries[catId][shopId][field]=val;
+  markDirty();
   recompute();
 }
 
@@ -703,33 +795,50 @@ function renderTotalScreen(){
 function recompute(){
   if(!activeCatId)return;
   const catEntries=entries[activeCatId]||{};
-  const vals=shops.map(s=>per100(catEntries[s.id]?.price,catEntries[s.id]?.weight));
-  const valid=vals.filter(v=>v!==null);
+  // 100gあたり単価（gあり）と1個あたり単価（個数あり）を両方計算
+  const vals100=shops.map(s=>per100(catEntries[s.id]?.price,catEntries[s.id]?.weight));
+  const valsItem=shops.map(s=>perItem(catEntries[s.id]?.price,catEntries[s.id]?.count));
+  // 比較はg優先、なければ個数
+  const valsComp=shops.map((s,i)=>vals100[i]!==null?vals100[i]:valsItem[i]);
+  const valid=valsComp.filter(v=>v!==null);
   const minVal=valid.length>=2?Math.min(...valid):null;
 
   shops.forEach((shop,i)=>{
-    const v=vals[i];const isBest=v!==null&&minVal!==null&&Math.abs(v-minVal)<0.001&&valid.length>=2;
+    const v=valsComp[i];const isBest=v!==null&&minVal!==null&&Math.abs(v-minVal)<0.001&&valid.length>=2;
     const card=document.getElementById(`sc_${shop.id}`);
-    if(card){
-      // カードのクラスはnth-childを使うので、bestだけ追加
-      card.className=card.className.replace(" best","")+(isBest?" best":"");
-    }
+    if(card)card.className=card.className.replace(" best","")+(isBest?" best":"");
     const num=document.getElementById(`snum_${shop.id}`);if(num)num.className="shop-num"+(isBest?" best":"");
     const badge=document.getElementById(`sbadge_${shop.id}`);if(badge)badge.style.display=isBest?"inline-block":"none";
-    const ur=document.getElementById(`ur_${shop.id}`);
-    if(ur){ur.style.display=v!==null?"flex":"none";if(v!==null)ur.querySelector(".unit-val").textContent=v.toFixed(1)+"円"+(isBest?" ✓":"");}
+    // 単価表示エリア
+    const urWrap=document.getElementById(`ur_${shop.id}`);
+    const ur100=document.getElementById(`ur100_${shop.id}`);
+    const urItem=document.getElementById(`urItem_${shop.id}`);
+    const uv100=document.getElementById(`uv100_${shop.id}`);
+    const uvItem=document.getElementById(`uvItem_${shop.id}`);
+    const has100=vals100[i]!==null;
+    const hasItem=valsItem[i]!==null;
+    if(urWrap)urWrap.style.display=(has100||hasItem)?"flex":"none";
+    if(ur100)ur100.style.display=has100?"flex":"none";
+    if(urItem)urItem.style.display=hasItem?"flex":"none";
+    if(uv100&&has100)uv100.textContent=vals100[i].toFixed(1)+"円"+(isBest&&!hasItem?" ✓":"");
+    if(uvItem&&hasItem)uvItem.textContent=valsItem[i].toFixed(1)+"円"+(isBest?" ✓":"");
   });
 
-  // カテゴリサマリー
+  // カテゴリサマリー（g優先・なければ個数）
   const avgs=shops.map(shop=>{
-    const vs=categories.map(cat=>per100(entries[cat.id]?.[shop.id]?.price,entries[cat.id]?.[shop.id]?.weight)).filter(v=>v!==null);
+    const vs=categories.map(cat=>{
+      const e=entries[cat.id]?.[shop.id];
+      const v100=per100(e?.price,e?.weight);
+      const vIt=perItem(e?.price,e?.count);
+      return v100!==null?v100:vIt;
+    }).filter(v=>v!==null);
     return vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null;
   });
   const va=avgs.filter(v=>v!==null);const minA=va.length>=2?Math.min(...va):null;
   shops.forEach((shop,i)=>{
     const avg=avgs[i];const isBest=avg!==null&&minA!==null&&Math.abs(avg-minA)<0.001&&va.length>=2;
     const sr=document.getElementById(`csr_${shop.id}`);
-    if(sr){sr.className="cat-sum-row"+(isBest?" best":"");sr.querySelector(".cat-sum-name").textContent=(isBest?"★ ":"")+shop.label;sr.querySelector(".cat-sum-val").textContent=avg!==null?avg.toFixed(1)+" 円/100g":"―";}
+    if(sr){sr.className="cat-sum-row"+(isBest?" best":"");sr.querySelector(".cat-sum-name").textContent=(isBest?"★ ":"")+shop.label;sr.querySelector(".cat-sum-val").textContent=avg!==null?avg.toFixed(1)+" 円/100g(個)":"―";}
   });
 }
 
@@ -743,7 +852,10 @@ function renderBtnRow(){
     <button class="btn btn-yellow" onclick="saveData()">💾</button>
     <button class="btn btn-teal"   onclick="exportCSV()">📥</button>
     <button class="btn btn-red"    onclick="resetData()">🗑</button>
-    <span class="save-msg" id="save-msg"></span>`;
+    <span class="save-msg" id="save-msg"></span>
+    <span id="dirty-msg" style="color:#ff9500;font-size:10px;font-weight:700;display:none">●未保存</span>
+  </div>
+  <div class="btn-row" id="drive-status-area" style="margin-top:3px"></div>`;
 }
 
 function renderCatTabs(){
@@ -784,10 +896,18 @@ function renderShopRows(){
         <span class="field-suffix">円</span>
         <div class="field"><input type="number" inputmode="decimal" value="${e.weight||""}" placeholder="g数" oninput="updateEntry('${activeCatId}','${shop.id}','weight',this.value)"></div>
         <span class="field-suffix">g</span>
+        <div class="field"><input type="number" inputmode="decimal" value="${e.count||""}" placeholder="個数" oninput="updateEntry('${activeCatId}','${shop.id}','count',this.value)"></div>
+        <span class="field-suffix">個</span>
       </div>
-      <div class="unit-result" id="ur_${shop.id}" style="display:none">
-        <span class="unit-label">100gあたり</span>
-        <span class="unit-val">―</span>
+      <div id="ur_${shop.id}" style="display:none;gap:6px;margin-top:5px;flex-wrap:wrap">
+        <div class="unit-result" id="ur100_${shop.id}" style="display:none;flex:1">
+          <span class="unit-label">100gあたり</span>
+          <span class="unit-val" id="uv100_${shop.id}">―</span>
+        </div>
+        <div class="unit-result" id="urItem_${shop.id}" style="display:none;flex:1">
+          <span class="unit-label">1個あたり</span>
+          <span class="unit-val" id="uvItem_${shop.id}">―</span>
+        </div>
       </div>
     </div>`;
   }).join("");
@@ -817,7 +937,7 @@ function applyShopEdit(){
 }
 function closeShopEdit(){document.getElementById("shop-edit-modal").style.display="none";window._editingShopId=null}
 
-loadData();loadHistory();loadApiKey();render();
+loadData();loadHistory();loadApiKey();render();initGoogleAuth();renderDriveStatus();
 </script>
 </body>
 </html>
