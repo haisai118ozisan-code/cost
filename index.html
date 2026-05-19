@@ -257,6 +257,15 @@ canvas#cc{display:none}
   </div>
 </div>
 
+<div class="modal-overlay" id="shop-edit-modal" style="display:none">
+  <div class="modal-sheet">
+    <div class="modal-title">✏️ 店舗名を編集</div>
+    <input type="text" id="shop-edit-input" class="name-inp" placeholder="店舗名" style="font-size:16px;padding:10px;margin-bottom:12px">
+    <button class="modal-btn primary" onclick="applyShopEdit()">✅ 確定</button>
+    <button class="modal-btn cancel"  onclick="closeShopEdit()">キャンセル</button>
+  </div>
+</div>
+
 <input type="file" id="file-ocr-cam" accept="image/*" capture="environment">
 <input type="file" id="file-ocr-lib" accept="image/*">
 <canvas id="cc"></canvas>
@@ -762,7 +771,7 @@ function renderShopRows(){
     return`<div class="shop-card" id="sc_${shop.id}">
       <div class="shop-head">
         <div class="shop-num" id="snum_${shop.id}">${i+1}</div>
-        <span class="shop-name-label">${shop.label}</span>
+        <span class="shop-name-label" onclick="startEditShop('${shop.id}')" style="cursor:pointer">${shop.label} ✏️</span>
         <span class="best-badge" id="sbadge_${shop.id}" style="display:none">★ 最安</span>
         <div class="action-mini">
           <button class="act-btn" onclick="openOCR('${activeCatId}','${shop.id}')">📸 OCR</button>
@@ -791,6 +800,22 @@ function renderCatSummary(){
       ${shops.map(s=>`<div class="cat-sum-row" id="csr_${s.id}"><span class="cat-sum-name">${s.label}</span><span class="cat-sum-val">―</span></div>`).join("")}
     </div>`;
 }
+
+function startEditShop(id){
+  window._editingShopId=id;
+  const shop=shops.find(s=>s.id===id);if(!shop)return;
+  document.getElementById("shop-edit-input").value=shop.label;
+  document.getElementById("shop-edit-modal").style.display="flex";
+  setTimeout(()=>{const inp=document.getElementById("shop-edit-input");if(inp){inp.focus();inp.select()}},50);
+}
+function applyShopEdit(){
+  const id=window._editingShopId;if(!id)return;
+  const val=document.getElementById("shop-edit-input").value.trim();
+  if(!val){alert("店舗名を入力してください");return}
+  const shop=shops.find(s=>s.id===id);if(shop)shop.label=val;
+  closeShopEdit();render();
+}
+function closeShopEdit(){document.getElementById("shop-edit-modal").style.display="none";window._editingShopId=null}
 
 loadData();loadHistory();loadApiKey();render();
 </script>
