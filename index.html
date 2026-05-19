@@ -315,37 +315,69 @@ function syncEntries(){
 }
 
 function loadData(){
-  try{
-    const d=JSON.parse(localStorage.getItem(SK));
-    if(d?.categories&&d?.shops&&d?.entries){
-      categories=d.categories;shops=d.shops;entries=d.entries;
-      activeCatId=categories[0]?.id||null;return;
-    }
-  }catch{}
+  // localStorageからは読み込まない（Driveのみ）
+  // 自動再接続中のため、初期データで起動
   initData();
+}
+function saveData(){
+  if(!accessToken){
+    if(!confirm("⚠️ Drive未接続です。\n\nデータを保存するにはDrive連携が必要です。\n今すぐ連携しますか？")){
+      showMsg("⚠️ 保存されません");return;
+    }
+    googleLoginForDrive();return;
+  }
+  // Driveに直接保存
+  isDirty=false;
+  const dm=document.getElementById("dirty-msg");if(dm)dm.style.display="none";
+  syncDrive();
 }
 
 // ===== Google Drive連携 =====
 function initGoogleAuth(){
-  window.onGoogleLibraryLoad=()=>{
-    try{
-      const saved=localStorage.getItem("pc_google_user");
-      if(saved){googleUser=JSON.parse(saved);renderDriveStatus();refreshDriveToken();}
-    }catch(e){}
-  };
+  // Googleライブラリ読み込み完了時
+  window.onGoogleLibraryLoad=tryAutoLogin;
+  // 既に読み込み済みの場合も対応
+  if(window.google&&google.accounts)tryAutoLogin();
 }
-function googleLoginForDrive(){
+function tryAutoLogin(){
   try{
-    // prompt:'select_account'でポップアップなしでアカウント選択画面を出す
+    const saved=localStorage.getItem("pc_google_user");
+    if(!saved)return;
+    googleUser=JSON.parse(saved);
+    renderDriveStatus();
+    // 自動的にトークン取得を試みる
     const tc=google.accounts.oauth2.initTokenClient({
       client_id:CLIENT_ID,scope:SCOPES,
       callback:(tr)=>{
         if(tr.error){
-          showMsg("⚠️ ログインエラー:"+tr.error);return;
+          showMsg("Drive再接続が必要");
+          return;
         }
         accessToken=tr.access_token;
         clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);
+        renderDriveStatus();
+        loadFromDrive(); // Driveからデータ読み込み
+        showMsg("☁️ 自動再接続");
+      }
+    });
+    tc.requestAccessToken({prompt:''});
+  }catch(e){}
+}
+function googleLoginForDrive(){
+  try{
+    const tc=google.accounts.oauth2.initTokenClient({
+      client_id:CLIENT_ID,scope:SCOPES,
+      callback:(tr)=>{
+        if(tr.error){
+          showMsg("⚠️ "+tr.error);return;
+        }
+        accessToken=tr.access_token;
+        // ユーザー情報を保存（次回自動再接続のため）
+        googleUser={connected:true,time:Date.now()};
+        localStorage.setItem("pc_google_user",JSON.stringify(googleUser));
+        clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);
         renderDriveStatus();showMsg("☁️ Drive連携済み");
+        loadFromDrive(); // 初回ログイン時にDriveから読み込み
       },
       error_callback:(err)=>{
         showMsg("⚠️ "+err.type);
@@ -370,12 +402,34 @@ function googleLogoutDrive(){
   clearTimeout(tokenTimer);localStorage.removeItem("pc_google_user");
   renderDriveStatus();showMsg("Drive切断");
 }
+
+// Driveからデータ読み込み
+async function loadFromDrive(){
+  if(!accessToken)return;
+  try{
+    const res=await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${DRIVE_FILE}' and trashed=false&fields=files(id,name)`,
+      {headers:{Authorization:`Bearer ${accessToken}`}});
+    const d=await res.json();
+    if(d.files?.length){
+      driveFileId=d.files[0].id;
+      const fr=await fetch(`https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
+        {headers:{Authorization:`Bearer ${accessToken}`}});
+      const json=await fr.json();
+      if(json.categories&&json.shops&&json.entries){
+        categories=json.categories;shops=json.shops;entries=json.entries;
+        activeCatId=categories[0]?.id||null;
+        render();
+        showMsg("✅ Driveから読込");
+      }
+    }
+  }catch(e){showMsg("⚠️ 読込エラー")}
+}
 function renderDriveStatus(){
   const el=document.getElementById("drive-status-area");if(!el)return;
   if(accessToken){
-    el.innerHTML=`<span class="save-msg" style="color:#7ec8e3">☁️ Drive連携中</span> <button class="btn btn-teal" onclick="syncDrive()">☁️ 同期</button> <button class="btn btn-red" onclick="googleLogoutDrive()">切断</button>`;
+    el.innerHTML=`<span class="save-msg" style="color:#7ec8e3">☁️ Drive連携中</span> <button class="btn btn-teal" onclick="syncDrive()">☁️ 今すぐ保存</button> <button class="btn btn-red" onclick="googleLogoutDrive()">切断</button> <span style="color:#888;font-size:9px">📁 マイドライブ/価格比較データ.json</span>`;
   }else{
-    el.innerHTML=`<button class="btn btn-blue" onclick="googleLoginForDrive()">☁️ Drive連携</button>`;
+    el.innerHTML=`<button class="btn btn-blue" onclick="googleLoginForDrive()">☁️ Drive連携</button> <span style="color:#ff6b6b;font-size:9px;font-weight:700">⚠️ 未連携：データ消失リスク</span>`;
   }
 }
 async function syncDrive(){
@@ -401,15 +455,6 @@ async function syncDrive(){
     }
     showMsg("☁️ Drive保存完了");
   }catch(e){showMsg("⚠️ Driveエラー")}
-}
-function saveData(){
-  try{
-    localStorage.setItem(SK,JSON.stringify({categories,shops,entries}));
-    isDirty=false;
-    const dm=document.getElementById("dirty-msg");if(dm)dm.style.display="none";
-    showMsg("保存 ✓");
-    if(accessToken)syncDrive();
-  }catch{showMsg("容量不足")}
 }
 function markDirty(){
   isDirty=true;
