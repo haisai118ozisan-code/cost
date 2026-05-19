@@ -394,6 +394,7 @@ async function syncDrive(){
     showMsg("☁️ Drive保存完了");
   }catch(e){showMsg("⚠️ Driveエラー")}
 }
+function saveData(){
   try{
     localStorage.setItem(SK,JSON.stringify({categories,shops,entries}));
     isDirty=false;
@@ -854,8 +855,7 @@ function renderBtnRow(){
     <button class="btn btn-red"    onclick="resetData()">🗑</button>
     <span class="save-msg" id="save-msg"></span>
     <span id="dirty-msg" style="color:#ff9500;font-size:10px;font-weight:700;display:none">●未保存</span>
-  </div>
-  <div class="btn-row" id="drive-status-area" style="margin-top:3px"></div>`;
+    <div id="drive-status-area" style="display:inline-flex;gap:4px;align-items:center"></div>`;
 }
 
 function renderCatTabs(){
