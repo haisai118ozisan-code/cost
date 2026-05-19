@@ -336,17 +336,25 @@ function initGoogleAuth(){
 }
 function googleLoginForDrive(){
   try{
+    // prompt:'select_account'でポップアップなしでアカウント選択画面を出す
     const tc=google.accounts.oauth2.initTokenClient({
       client_id:CLIENT_ID,scope:SCOPES,
       callback:(tr)=>{
-        if(tr.error)return;
+        if(tr.error){
+          showMsg("⚠️ ログインエラー:"+tr.error);return;
+        }
         accessToken=tr.access_token;
         clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);
         renderDriveStatus();showMsg("☁️ Drive連携済み");
+      },
+      error_callback:(err)=>{
+        showMsg("⚠️ "+err.type);
       }
     });
-    tc.requestAccessToken({prompt:""});
-  }catch(e){alert("Googleログインに失敗しました。\nページを再読み込みしてください。")}
+    tc.requestAccessToken({prompt:'select_account'});
+  }catch(e){
+    showMsg("⚠️ "+e.message);
+  }
 }
 function refreshDriveToken(){
   try{
