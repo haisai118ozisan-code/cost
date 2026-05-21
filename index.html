@@ -334,72 +334,84 @@ function saveData(){
 
 // ===== Google Drive連携 =====
 function initGoogleAuth(){
-  // Googleライブラリ読み込み完了時
   window.onGoogleLibraryLoad=tryAutoLogin;
-  // 既に読み込み済みの場合も対応
   if(window.google&&google.accounts)tryAutoLogin();
 }
 function tryAutoLogin(){
   try{
+    // One Tap初期化（未ログイン時に自動表示）
+    google.accounts.id.initialize({
+      client_id:CLIENT_ID,
+      callback:handleIdCallback,
+      auto_select:true,
+      cancel_on_tap_outside:false
+    });
     const saved=localStorage.getItem("pc_google_user");
-    if(!saved)return;
-    googleUser=JSON.parse(saved);
+    if(saved){
+      googleUser=JSON.parse(saved);
+      renderDriveStatus();
+      // サイレントトークン取得（画面を出さない）
+      silentDriveToken();
+    }else{
+      // 未連携時はOne Tapを促す
+      google.accounts.id.prompt();
+    }
+  }catch(e){}
+}
+function handleIdCallback(response){
+  // ID Tokenからユーザー情報取得
+  try{
+    const p=JSON.parse(atob(response.credential.split(".")[1]));
+    googleUser={name:p.name,email:p.email,picture:p.picture,time:Date.now()};
+    localStorage.setItem("pc_google_user",JSON.stringify(googleUser));
     renderDriveStatus();
-    // 自動的にトークン取得を試みる
+    silentDriveToken(); // Drive権限も取得
+  }catch(e){}
+}
+function silentDriveToken(){
+  try{
     const tc=google.accounts.oauth2.initTokenClient({
       client_id:CLIENT_ID,scope:SCOPES,
       callback:(tr)=>{
         if(tr.error){
-          showMsg("Drive再接続が必要");
-          return;
+          renderDriveStatus();return;
         }
         accessToken=tr.access_token;
-        clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);
+        clearTimeout(tokenTimer);tokenTimer=setTimeout(silentDriveToken,55*60*1000);
         renderDriveStatus();
-        loadFromDrive(); // Driveからデータ読み込み
-        showMsg("☁️ 自動再接続");
+        loadFromDrive();
+        showMsg("☁️ 自動接続");
       }
     });
-    tc.requestAccessToken({prompt:''});
-  }catch(e){}
+    tc.requestAccessToken({prompt:''}); // プロンプトなし・自動
+  }catch(e){renderDriveStatus();}
 }
 function googleLoginForDrive(){
   try{
     const tc=google.accounts.oauth2.initTokenClient({
       client_id:CLIENT_ID,scope:SCOPES,
       callback:(tr)=>{
-        if(tr.error){
-          showMsg("⚠️ "+tr.error);return;
-        }
+        if(tr.error){showMsg("⚠️ "+tr.error);return;}
         accessToken=tr.access_token;
-        // ユーザー情報を保存（次回自動再接続のため）
-        googleUser={connected:true,time:Date.now()};
+        if(!googleUser)googleUser={connected:true,time:Date.now()};
         localStorage.setItem("pc_google_user",JSON.stringify(googleUser));
-        clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);
+        clearTimeout(tokenTimer);tokenTimer=setTimeout(silentDriveToken,55*60*1000);
         renderDriveStatus();showMsg("☁️ Drive連携済み");
-        loadFromDrive(); // 初回ログイン時にDriveから読み込み
+        loadFromDrive();
       },
-      error_callback:(err)=>{
-        showMsg("⚠️ "+err.type);
-      }
+      error_callback:(err)=>{showMsg("⚠️ "+err.type);}
     });
-    tc.requestAccessToken({prompt:'select_account'});
-  }catch(e){
-    showMsg("⚠️ "+e.message);
-  }
+    // 初回連携時のみconsent表示
+    const hasConsent=localStorage.getItem("pc_google_user");
+    tc.requestAccessToken({prompt:hasConsent?'':'consent'});
+  }catch(e){showMsg("⚠️ "+e.message);}
 }
-function refreshDriveToken(){
-  try{
-    const tc=google.accounts.oauth2.initTokenClient({
-      client_id:CLIENT_ID,scope:SCOPES,
-      callback:(tr)=>{if(!tr.error){accessToken=tr.access_token;clearTimeout(tokenTimer);tokenTimer=setTimeout(refreshDriveToken,55*60*1000);}}
-    });
-    tc.requestAccessToken({prompt:""});
-  }catch(e){}
-}
+function refreshDriveToken(){silentDriveToken();}
 function googleLogoutDrive(){
   googleUser=null;accessToken=null;driveFileId=null;
-  clearTimeout(tokenTimer);localStorage.removeItem("pc_google_user");
+  clearTimeout(tokenTimer);
+  localStorage.removeItem("pc_google_user");
+  try{google.accounts.id.disableAutoSelect();}catch(e){}
   renderDriveStatus();showMsg("Drive切断");
 }
 
